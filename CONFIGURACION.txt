@@ -1,0 +1,108 @@
+=======================================================
+  CONFIGURACIÓN RÁPIDA - CLEANING APP BACKEND
+=======================================================
+
+📋 PASOS PARA EJECUTAR EL BACKEND:
+
+1. INSTALAR DEPENDENCIAS
+   -----------------------
+   Abre PowerShell en esta carpeta y ejecuta:
+   
+   npm install
+   
+   Esto instalará:
+   - express (servidor web)
+   - mysql2 (conexión a MySQL)
+   - cors (permitir peticiones desde React Native)
+   - dotenv (variables de entorno)
+   - multer (subir archivos)
+
+2. CONFIGURAR BASE DE DATOS
+   --------------------------
+   Edita el archivo .env y actualiza tu contraseña de MySQL:
+   
+   DB_PASSWORD=tu_contraseña_aqui
+   
+   (Deja los demás valores como están)
+
+3. VERIFICAR MYSQL
+   ----------------
+   Asegúrate de que MySQL está corriendo:
+   
+   net start | findstr MySQL
+   
+   Si no está corriendo, inícialo:
+   
+   net start MySQL80
+
+4. INICIAR EL SERVIDOR
+   --------------------
+   En PowerShell:
+   
+   npm start
+   
+   O para desarrollo (recarga automática):
+   
+   npm run dev
+
+5. VERIFICAR QUE FUNCIONA
+   -----------------------
+   Abre tu navegador en:
+   
+   http://localhost:3000
+   
+   Deberías ver un JSON con información de la API.
+
+=======================================================
+
+🧪 PROBAR LA API:
+
+Desde PowerShell:
+
+# Probar login de admin
+Invoke-WebRequest -Uri "http://localhost:3000/api/auth/login/admin" -Method POST -ContentType "application/json" -Body '{"usuario":"admin","password":"admin123"}'
+
+# Obtener todas las tareas
+Invoke-WebRequest -Uri "http://localhost:3000/api/tareas"
+
+# Obtener todos los trabajadores
+Invoke-WebRequest -Uri "http://localhost:3000/api/trabajadores"
+
+=======================================================
+
+📱 CONECTAR CON REACT NATIVE:
+
+En tu app React Native, usa:
+
+const API_URL = 'http://localhost:3000/api';
+
+// En emulador Android usa:
+const API_URL = 'http://10.0.2.2:3000/api';
+
+// En dispositivo físico usa la IP de tu PC:
+const API_URL = 'http://192.168.1.XXX:3000/api';
+
+=======================================================
+
+❌ ERRORES COMUNES:
+
+1. "Cannot connect to MySQL"
+   → Verifica tu contraseña en .env
+   → Asegúrate de que MySQL está corriendo
+   
+2. "Port 3000 already in use"
+   → Cambia PORT=3001 en .env
+   
+3. "Cannot find module 'express'"
+   → Ejecuta: npm install
+
+=======================================================
+
+📚 DOCUMENTACIÓN COMPLETA:
+
+Ver archivo README.md para documentación completa de todos
+los endpoints y ejemplos de uso.
+
+=======================================================
+
+

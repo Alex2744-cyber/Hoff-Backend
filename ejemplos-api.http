@@ -1,0 +1,250 @@
+###
+# CLEANING APP - EJEMPLOS DE API
+# Usa REST Client extension en VS Code o copia estos ejemplos en Postman
+###
+
+@baseUrl = http://localhost:3000/api
+
+### ============================================
+### AUTENTICACIÓN
+### ============================================
+
+### Login Admin
+POST {{baseUrl}}/auth/login/admin
+Content-Type: application/json
+
+{
+  "usuario": "admin",
+  "password": "admin123"
+}
+
+### Login Trabajador
+POST {{baseUrl}}/auth/login/trabajador
+Content-Type: application/json
+
+{
+  "usuario": "jperez",
+  "password": "worker123"
+}
+
+### ============================================
+### TAREAS
+### ============================================
+
+### Obtener todas las tareas
+GET {{baseUrl}}/tareas
+
+### Obtener tarea por ID
+GET {{baseUrl}}/tareas/1
+
+### Crear nueva tarea
+POST {{baseUrl}}/tareas
+Content-Type: application/json
+
+{
+  "cliente_id": 1,
+  "direccion_id": 2,
+  "fecha_realizacion": "2025-11-20",
+  "descripcion_general": "Limpieza profunda de oficinas",
+  "detalles_especificos": "Incluye limpieza de alfombras y ventanas",
+  "numero_horas": 5.0,
+  "valor_servicio": 200.00,
+  "trabajadores": [1, 2]
+}
+
+### Actualizar tarea
+PUT {{baseUrl}}/tareas/1
+Content-Type: application/json
+
+{
+  "fecha_realizacion": "2025-11-25",
+  "numero_horas": 6.0,
+  "estado": "asignada"
+}
+
+### Buscar tareas por dirección
+GET {{baseUrl}}/tareas/buscar?busqueda=Gran%20Via
+
+### Obtener tareas de un trabajador
+GET {{baseUrl}}/tareas/trabajador/1
+
+### Asignar trabajador a tarea
+POST {{baseUrl}}/tareas/1/asignar
+Content-Type: application/json
+
+{
+  "trabajador_id": 3,
+  "notas": "Trabajador especializado en este tipo de limpieza"
+}
+
+### Desasignar trabajador de tarea
+DELETE {{baseUrl}}/tareas/1/trabajador/3
+
+### ============================================
+### TRABAJADORES
+### ============================================
+
+### Obtener todos los trabajadores
+GET {{baseUrl}}/trabajadores
+
+### Obtener trabajador por ID
+GET {{baseUrl}}/trabajadores/1
+
+### Crear nuevo trabajador
+POST {{baseUrl}}/trabajadores
+Content-Type: application/json
+
+{
+  "usuario": "pgarcia",
+  "password": "password123",
+  "nombre": "Pedro García",
+  "descripcion": "Especialista en limpieza de cristales"
+}
+
+### Actualizar trabajador
+PUT {{baseUrl}}/trabajadores/1
+Content-Type: application/json
+
+{
+  "nombre": "Juan Pérez González",
+  "descripcion": "Especialista en limpieza residencial y comercial"
+}
+
+### Cambiar contraseña de trabajador
+PUT {{baseUrl}}/trabajadores/1/password
+Content-Type: application/json
+
+{
+  "password_actual": "worker123",
+  "password_nueva": "nueva_password456"
+}
+
+### Obtener horas trabajadas por trabajador
+GET {{baseUrl}}/trabajadores/1/horas
+
+### Obtener horas de un mes específico
+GET {{baseUrl}}/trabajadores/1/horas?mes=11&anio=2025
+
+### ============================================
+### CLIENTES
+### ============================================
+
+### Obtener todos los clientes
+GET {{baseUrl}}/clientes
+
+### Obtener cliente por ID
+GET {{baseUrl}}/clientes/1
+
+### Crear cliente particular
+POST {{baseUrl}}/clientes
+Content-Type: application/json
+
+{
+  "nombre": "María González",
+  "tipo": "particular",
+  "telefono": "+34 666777888",
+  "email": "maria@email.com",
+  "descripcion": "Cliente residencial habitual"
+}
+
+### Crear cliente empresa
+POST {{baseUrl}}/clientes
+Content-Type: application/json
+
+{
+  "nombre": "Hotel Palace",
+  "tipo": "empresa",
+  "nombre_empresa": "Hotel Palace S.L.",
+  "telefono": "+34 912345678",
+  "email": "info@hotelpalace.es",
+  "descripcion": "Hotel de 5 estrellas"
+}
+
+### Actualizar cliente
+PUT {{baseUrl}}/clientes/1
+Content-Type: application/json
+
+{
+  "telefono": "+34 611222333",
+  "email": "nuevo@email.com"
+}
+
+### Obtener tareas de un cliente
+GET {{baseUrl}}/clientes/1/tareas
+
+### ============================================
+### HORAS TRABAJADAS
+### ============================================
+
+### Registrar horas trabajadas
+POST {{baseUrl}}/horas
+Content-Type: application/json
+
+{
+  "tarea_id": 1,
+  "trabajador_id": 1,
+  "horas": 4.5,
+  "descripcion": "Limpieza completa de oficinas y baños"
+}
+
+### Obtener horas de una tarea
+GET {{baseUrl}}/horas/tarea/1
+
+### Actualizar registro de horas
+PUT {{baseUrl}}/horas/1
+Content-Type: application/json
+
+{
+  "horas": 5.0,
+  "descripcion": "Limpieza completa incluyendo ventanas"
+}
+
+### ============================================
+### DIRECCIONES
+### ============================================
+
+### Obtener todas las direcciones
+GET {{baseUrl}}/direcciones
+
+### Obtener dirección por ID
+GET {{baseUrl}}/direcciones/1
+
+### Crear nueva dirección
+POST {{baseUrl}}/direcciones
+Content-Type: application/json
+
+{
+  "direccion_completa": "Calle Serrano 89, 1º, Madrid, 28006",
+  "calle": "Calle Serrano",
+  "numero": "89",
+  "piso": "1º",
+  "ciudad": "Madrid",
+  "codigo_postal": "28006",
+  "provincia": "Madrid",
+  "pais": "España",
+  "notas": "Portero automático, código 5678"
+}
+
+### Actualizar dirección
+PUT {{baseUrl}}/direcciones/1
+Content-Type: application/json
+
+{
+  "piso": "2º A",
+  "notas": "Código de acceso actualizado: 1234"
+}
+
+### Buscar direcciones
+GET {{baseUrl}}/direcciones/buscar?busqueda=Serrano
+
+### ============================================
+### HEALTH CHECK
+### ============================================
+
+### Verificar que el servidor funciona
+GET http://localhost:3000/
+
+### Health check
+GET http://localhost:3000/health
+
+
