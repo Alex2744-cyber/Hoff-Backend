@@ -1,4 +1,13 @@
 const { pool } = require('../config/database');
+const { buildDireccionCompleta } = require('../utils/buildDireccionCompleta');
+
+const PAIS_DEFECTO = 'United Kingdom';
+
+function trimOrNull(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s === '' ? null : s;
+}
 
 // Obtener todas las direcciones (solo de clientes activos)
 const getAllDirecciones = async (req, res, next) => {
@@ -50,7 +59,6 @@ const createDireccion = async (req, res, next) => {
   try {
     const {
       cliente_id,
-      direccion_completa,
       calle,
       numero,
       piso,
@@ -61,12 +69,35 @@ const createDireccion = async (req, res, next) => {
       notas
     } = req.body;
 
-    if (!cliente_id || !direccion_completa || !calle || !ciudad) {
+    if (!cliente_id || !calle || !ciudad) {
       return res.status(400).json({
         success: false,
-        error: 'cliente_id, direccion_completa, calle y ciudad son requeridos'
+        error: 'cliente_id, calle y ciudad son requeridos'
       });
     }
+
+    const calleT = String(calle).trim();
+    const ciudadT = String(ciudad).trim();
+    if (!calleT || !ciudadT) {
+      return res.status(400).json({
+        success: false,
+        error: 'Calle y ciudad no pueden estar vacíos'
+      });
+    }
+
+    const paisFinal = trimOrNull(pais) || PAIS_DEFECTO;
+
+    const partes = {
+      calle: calleT,
+      numero: trimOrNull(numero),
+      piso: trimOrNull(piso),
+      ciudad: ciudadT,
+      codigo_postal: trimOrNull(codigo_postal),
+      provincia: trimOrNull(provincia),
+      pais: paisFinal
+    };
+
+    const direccion_completa = buildDireccionCompleta(partes);
 
     // Verificar que el cliente existe y está activo
     const [cliente] = await pool.query(
@@ -99,7 +130,9 @@ const createDireccion = async (req, res, next) => {
     }
 
     // Validación flexible: verificar calle + número + código postal
-    if (calle && numero && codigo_postal) {
+    const numT = trimOrNull(numero);
+    const cpT = trimOrNull(codigo_postal);
+    if (numT && cpT) {
       const [existingFlexible] = await pool.query(`
         SELECT d.id, d.direccion_completa
         FROM direcciones d
@@ -109,12 +142,12 @@ const createDireccion = async (req, res, next) => {
           AND d.codigo_postal = ?
           AND d.cliente_id != ?
           AND c.activo = TRUE
-      `, [calle.trim(), numero.trim(), codigo_postal.trim(), cliente_id]);
+      `, [calleT, numT, cpT, cliente_id]);
 
       if (existingFlexible.length > 0) {
         return res.status(400).json({
           success: false,
-          error: `Esta dirección (${calle} ${numero}, ${codigo_postal}) ya está registrada para otro cliente activo: ${existingFlexible[0].direccion_completa}`
+          error: `Esta dirección (${calleT} ${numT}, ${cpT}) ya está registrada para otro cliente activo: ${existingFlexible[0].direccion_completa}`
         });
       }
     }
@@ -128,14 +161,14 @@ const createDireccion = async (req, res, next) => {
     const [result] = await pool.query(query, [
       cliente_id,
       direccion_completa,
-      calle,
-      numero || null,
-      piso || null,
-      ciudad,
-      codigo_postal || null,
-      provincia || null,
-      pais || 'España',
-      notas || null
+      calleT,
+      numT,
+      trimOrNull(piso),
+      ciudadT,
+      cpT,
+      trimOrNull(provincia),
+      paisFinal,
+      trimOrNull(notas)
     ]);
 
     res.status(201).json({
@@ -155,7 +188,6 @@ const updateDireccion = async (req, res, next) => {
   try {
     const { id } = req.params;
     const {
-      direccion_completa,
       calle,
       numero,
       piso,
@@ -166,53 +198,70 @@ const updateDireccion = async (req, res, next) => {
       notas
     } = req.body;
 
-    // Obtener el cliente_id actual de la dirección
-    const [direccionActual] = await pool.query(
-      'SELECT cliente_id FROM direcciones WHERE id = ?',
-      [id]
-    );
+    const [rows] = await pool.query('SELECT * FROM direcciones WHERE id = ?', [id]);
 
-    if (direccionActual.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({
         success: false,
         error: 'Dirección no encontrada'
       });
     }
 
-    const clienteIdActual = direccionActual[0].cliente_id;
+    const cur = rows[0];
+    const clienteIdActual = cur.cliente_id;
 
-    // Si se está actualizando direccion_completa, verificar duplicados (validación exacta)
-    if (direccion_completa) {
-      const [existing] = await pool.query(`
-        SELECT d.id 
-        FROM direcciones d
-        JOIN clientes c ON d.cliente_id = c.id
-        WHERE d.direccion_completa = ? 
-          AND d.cliente_id != ? 
-          AND d.id != ?
-          AND c.activo = TRUE
-      `, [direccion_completa, clienteIdActual, id]);
+    const pick = (incoming, current) => (incoming !== undefined ? incoming : current);
 
-      if (existing.length > 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'Esta dirección ya está registrada para otro cliente activo'
-        });
-      }
+    let calleM = pick(calle, cur.calle);
+    let ciudadM = pick(ciudad, cur.ciudad);
+    calleM = calleM != null ? String(calleM).trim() : '';
+    ciudadM = ciudadM != null ? String(ciudadM).trim() : '';
+
+    if (!calleM || !ciudadM) {
+      return res.status(400).json({
+        success: false,
+        error: 'Calle y ciudad no pueden estar vacíos'
+      });
     }
 
-    // Validación flexible: verificar calle + número + código postal
-    // Obtener valores actuales de la dirección para comparar
-    const [direccionData] = await pool.query(
-      'SELECT calle, numero, codigo_postal FROM direcciones WHERE id = ?',
-      [id]
-    );
+    const numeroM = trimOrNull(pick(numero, cur.numero));
+    const pisoM = trimOrNull(pick(piso, cur.piso));
+    const cpM = trimOrNull(pick(codigo_postal, cur.codigo_postal));
+    const provM = trimOrNull(pick(provincia, cur.provincia));
+    let paisM = trimOrNull(pick(pais, cur.pais));
+    if (!paisM) paisM = PAIS_DEFECTO;
+    const notasM = notas !== undefined ? trimOrNull(notas) : trimOrNull(cur.notas);
 
-    const calleFinal = calle || direccionData[0]?.calle;
-    const numeroFinal = numero !== undefined ? numero : direccionData[0]?.numero;
-    const codigoPostalFinal = codigo_postal !== undefined ? codigo_postal : direccionData[0]?.codigo_postal;
+    const partes = {
+      calle: calleM,
+      numero: numeroM,
+      piso: pisoM,
+      ciudad: ciudadM,
+      codigo_postal: cpM,
+      provincia: provM,
+      pais: paisM
+    };
 
-    if (calleFinal && numeroFinal && codigoPostalFinal) {
+    const direccion_completa = buildDireccionCompleta(partes);
+
+    const [existing] = await pool.query(`
+      SELECT d.id 
+      FROM direcciones d
+      JOIN clientes c ON d.cliente_id = c.id
+      WHERE d.direccion_completa = ? 
+        AND d.cliente_id != ? 
+        AND d.id != ?
+        AND c.activo = TRUE
+    `, [direccion_completa, clienteIdActual, id]);
+
+    if (existing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Esta dirección ya está registrada para otro cliente activo'
+      });
+    }
+
+    if (calleM && numeroM && cpM) {
       const [existingFlexible] = await pool.query(`
         SELECT d.id, d.direccion_completa
         FROM direcciones d
@@ -223,67 +272,34 @@ const updateDireccion = async (req, res, next) => {
           AND d.cliente_id != ?
           AND d.id != ?
           AND c.activo = TRUE
-      `, [calleFinal.trim(), numeroFinal.trim(), codigoPostalFinal.trim(), clienteIdActual, id]);
+      `, [calleM, numeroM, cpM, clienteIdActual, id]);
 
       if (existingFlexible.length > 0) {
         return res.status(400).json({
           success: false,
-          error: `Esta dirección (${calleFinal} ${numeroFinal}, ${codigoPostalFinal}) ya está registrada para otro cliente activo: ${existingFlexible[0].direccion_completa}`
+          error: `Esta dirección (${calleM} ${numeroM}, ${cpM}) ya está registrada para otro cliente activo: ${existingFlexible[0].direccion_completa}`
         });
       }
     }
 
-    const updates = [];
-    const values = [];
-
-    if (direccion_completa) {
-      updates.push('direccion_completa = ?');
-      values.push(direccion_completa);
-    }
-    if (calle) {
-      updates.push('calle = ?');
-      values.push(calle);
-    }
-    if (numero !== undefined) {
-      updates.push('numero = ?');
-      values.push(numero);
-    }
-    if (piso !== undefined) {
-      updates.push('piso = ?');
-      values.push(piso);
-    }
-    if (ciudad) {
-      updates.push('ciudad = ?');
-      values.push(ciudad);
-    }
-    if (codigo_postal !== undefined) {
-      updates.push('codigo_postal = ?');
-      values.push(codigo_postal);
-    }
-    if (provincia !== undefined) {
-      updates.push('provincia = ?');
-      values.push(provincia);
-    }
-    if (pais) {
-      updates.push('pais = ?');
-      values.push(pais);
-    }
-    if (notas !== undefined) {
-      updates.push('notas = ?');
-      values.push(notas);
-    }
-
-    if (updates.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'No hay campos para actualizar'
-      });
-    }
-
-    values.push(id);
-    const query = `UPDATE direcciones SET ${updates.join(', ')} WHERE id = ?`;
-
-    await pool.query(query, values);
+    await pool.query(
+      `UPDATE direcciones SET 
+        direccion_completa = ?, calle = ?, numero = ?, piso = ?, ciudad = ?, 
+        codigo_postal = ?, provincia = ?, pais = ?, notas = ?
+      WHERE id = ?`,
+      [
+        direccion_completa,
+        calleM,
+        numeroM,
+        pisoM,
+        ciudadM,
+        cpM,
+        provM,
+        paisM,
+        notasM,
+        id
+      ]
+    );
 
     res.json({
       success: true,

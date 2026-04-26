@@ -62,11 +62,13 @@ const getClienteById = async (req, res, next) => {
 // Crear nuevo cliente
 const createCliente = async (req, res, next) => {
   try {
+    // foto_perfil: URL absoluta (POST /api/media/upload tipo cliente_perfil) o URL legado en texto
     const {
       nombre,
       tipo,
       nombre_empresa,
       descripcion,
+      foto_perfil,
       telefono,
       email,
       administrador_nombre,
@@ -74,10 +76,10 @@ const createCliente = async (req, res, next) => {
       administrador_email
     } = req.body;
 
-    if (!nombre || !tipo) {
+    if (!tipo) {
       return res.status(400).json({
         success: false,
-        error: 'Nombre y tipo son requeridos'
+        error: 'El tipo es requerido'
       });
     }
 
@@ -88,25 +90,42 @@ const createCliente = async (req, res, next) => {
       });
     }
 
-    // Validar que si es empresa, nombre_empresa no esté vacío
-    if (tipo === 'empresa' && !nombre_empresa) {
-      return res.status(400).json({
-        success: false,
-        error: 'El nombre de la empresa es requerido para clientes tipo empresa'
-      });
+    let nombreFinal;
+    let nombreEmpresaValue = null;
+
+    if (tipo === 'empresa') {
+      const ne = nombre_empresa != null ? String(nombre_empresa).trim() : '';
+      if (!ne) {
+        return res.status(400).json({
+          success: false,
+          error: 'El nombre de la empresa es requerido para clientes tipo empresa'
+        });
+      }
+      nombreFinal = ne;
+      nombreEmpresaValue = ne;
+    } else {
+      const n = nombre != null ? String(nombre).trim() : '';
+      if (!n) {
+        return res.status(400).json({
+          success: false,
+          error: 'El nombre es requerido'
+        });
+      }
+      nombreFinal = n;
     }
 
     const query = `
       INSERT INTO clientes 
-      (nombre, tipo, nombre_empresa, descripcion, telefono, email, administrador_nombre, administrador_telefono, administrador_email)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (nombre, tipo, nombre_empresa, descripcion, foto_perfil, telefono, email, administrador_nombre, administrador_telefono, administrador_email)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const [result] = await pool.query(query, [
-      nombre,
+      nombreFinal,
       tipo,
-      nombre_empresa || null,
+      nombreEmpresaValue,
       descripcion || null,
+      foto_perfil && String(foto_perfil).trim() ? String(foto_perfil).trim() : null,
       telefono || null,
       email || null,
       tipo === 'empresa' ? (administrador_nombre || null) : null,
@@ -119,7 +138,7 @@ const createCliente = async (req, res, next) => {
       message: 'Cliente creado exitosamente',
       data: {
         id: result.insertId,
-        nombre,
+        nombre: nombreFinal,
         tipo
       }
     });
@@ -137,6 +156,7 @@ const updateCliente = async (req, res, next) => {
       tipo,
       nombre_empresa,
       descripcion,
+      foto_perfil,
       telefono,
       email,
       administrador_nombre,
@@ -160,10 +180,8 @@ const updateCliente = async (req, res, next) => {
     const updates = [];
     const values = [];
 
-    if (nombre) {
-      updates.push('nombre = ?');
-      values.push(nombre);
-    }
+    const nombreEmpresaInBody = Object.prototype.hasOwnProperty.call(req.body, 'nombre_empresa');
+
     if (tipo) {
       if (!['empresa', 'particular'].includes(tipo)) {
         return res.status(400).json({
@@ -174,13 +192,43 @@ const updateCliente = async (req, res, next) => {
       updates.push('tipo = ?');
       values.push(tipo);
     }
-    if (nombre_empresa !== undefined) {
+
+    if (nombreEmpresaInBody && nuevoTipo === 'empresa') {
+      const v = nombre_empresa != null ? String(nombre_empresa).trim() : '';
+      if (!v) {
+        return res.status(400).json({
+          success: false,
+          error: 'El nombre de la empresa es requerido para clientes tipo empresa'
+        });
+      }
+      updates.push('nombre = ?', 'nombre_empresa = ?');
+      values.push(v, v);
+    } else if (nombreEmpresaInBody) {
       updates.push('nombre_empresa = ?');
-      values.push(nombre_empresa);
+      values.push(nombre_empresa || null);
+    }
+
+    if (!(nombreEmpresaInBody && nuevoTipo === 'empresa')) {
+      if (nombre && String(nombre).trim()) {
+        const n = String(nombre).trim();
+        if (nuevoTipo === 'empresa' && !nombreEmpresaInBody) {
+          updates.push('nombre = ?', 'nombre_empresa = ?');
+          values.push(n, n);
+        } else if (nuevoTipo === 'particular') {
+          updates.push('nombre = ?');
+          values.push(n);
+        }
+      }
     }
     if (descripcion !== undefined) {
       updates.push('descripcion = ?');
       values.push(descripcion);
+    }
+    if (foto_perfil !== undefined) {
+      updates.push('foto_perfil = ?');
+      values.push(
+        foto_perfil && String(foto_perfil).trim() ? String(foto_perfil).trim() : null
+      );
     }
     if (telefono !== undefined) {
       updates.push('telefono = ?');

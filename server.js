@@ -1,8 +1,13 @@
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 const { testConnection } = require('./src/config/database');
+const { assertJwtConfiguredForProduction } = require('./src/config/jwt');
+const { requireAuth } = require('./src/middleware/requireAuth');
 const errorHandler = require('./src/middleware/errorHandler');
 
 // Importar rutas
@@ -13,12 +18,67 @@ const clientesRoutes = require('./src/routes/clientes');
 const horasRoutes = require('./src/routes/horas');
 const direccionesRoutes = require('./src/routes/direcciones');
 const finanzasRoutes = require('./src/routes/finanzas');
+const mediaRoutes = require('./src/routes/media');
+const { ensureUploadRoot, getUploadRoot } = require('./src/config/upload');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+function parseAllowedOrigins(value) {
+  return String(value || '')
+    .split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+}
+
+const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
+const allowedOriginsSet = new Set(allowedOrigins);
+
+function corsOriginValidator(origin, callback) {
+  if (!origin) {
+    // Apps nativas, curl y Postman suelen no enviar Origin
+    callback(null, true);
+    return;
+  }
+
+  const normalized = String(origin).trim().replace(/\/$/, '');
+  if (allowedOriginsSet.has(normalized)) {
+    callback(null, true);
+    return;
+  }
+
+  callback(new Error('CORS bloqueado para este origen'));
+}
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.RATE_LIMIT_GLOBAL_MAX || 600),
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === '/' || req.path === '/health',
+  message: { success: false, error: 'Demasiadas solicitudes. Intenta más tarde.' },
+});
+
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+  if (allowedOrigins.length === 0) {
+    throw new Error(
+      'ALLOWED_ORIGINS es obligatorio en producción. Define una lista separada por comas.'
+    );
+  }
+}
+
 // Middlewares
-app.use(cors());
+app.use(
+  helmet({
+    // Permite servir imágenes desde /uploads cuando app y API están en subdominios distintos.
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+app.use(cors({ origin: corsOriginValidator }));
+app.use(apiLimiter);
+ensureUploadRoot();
+app.use('/uploads', express.static(path.join(getUploadRoot())));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -55,14 +115,15 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Rutas de la API
+// Rutas de la API (auth/login público; el resto exige Bearer JWT)
 app.use('/api/auth', authRoutes);
-app.use('/api/tareas', tareasRoutes);
-app.use('/api/trabajadores', trabajadoresRoutes);
-app.use('/api/clientes', clientesRoutes);
-app.use('/api/horas', horasRoutes);
-app.use('/api/direcciones', direccionesRoutes);
-app.use('/api/finanzas', finanzasRoutes);
+app.use('/api/tareas', requireAuth, tareasRoutes);
+app.use('/api/trabajadores', requireAuth, trabajadoresRoutes);
+app.use('/api/clientes', requireAuth, clientesRoutes);
+app.use('/api/horas', requireAuth, horasRoutes);
+app.use('/api/direcciones', requireAuth, direccionesRoutes);
+app.use('/api/finanzas', requireAuth, finanzasRoutes);
+app.use('/api/media', requireAuth, mediaRoutes);
 
 // Manejo de rutas no encontradas
 app.use('*', (req, res) => {
@@ -78,6 +139,8 @@ app.use(errorHandler);
 // Iniciar servidor
 const startServer = async () => {
   try {
+    assertJwtConfiguredForProduction();
+
     // Verificar conexión a la base de datos
     const connected = await testConnection();
     
@@ -103,6 +166,7 @@ const startServer = async () => {
       console.log(`   GET  http://localhost:${PORT}/api/tareas`);
       console.log(`   GET  http://localhost:${PORT}/api/trabajadores`);
       console.log(`   GET  http://localhost:${PORT}/api/clientes`);
+      console.log(`   POST http://localhost:${PORT}/api/media/upload`);
       console.log('='.repeat(50));
     });
 

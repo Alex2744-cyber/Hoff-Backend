@@ -14,7 +14,6 @@ const {
   completarTarea,
   aprobarTarea,
   devolverTarea,
-  marcarTareaComoPagada,
 } = require('../controllers/tareasController');
 
 // GET /api/tareas - Obtener todas las tareas
@@ -55,9 +54,6 @@ router.post('/:id/aprobar', aprobarTarea);
 
 // PUT /api/tareas/:id/devolver - Devolver tarea completada (admin)
 router.put('/:id/devolver', devolverTarea);
-
-// PUT /api/tareas/:id/marcar-pagado - Marcar tarea como pagada (admin)
-router.put('/:id/marcar-pagado', marcarTareaComoPagada);
 
 module.exports = router;
 

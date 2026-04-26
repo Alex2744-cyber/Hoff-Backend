@@ -1,10 +1,11 @@
 const { pool } = require('../config/database');
+const { hashPassword, verifyOnly } = require('../utils/password');
 
 // Obtener todos los trabajadores
 const getAllTrabajadores = async (req, res, next) => {
   try {
     const query = `
-      SELECT id, usuario, nombre, descripcion, foto_perfil, fecha_creacion, activo
+      SELECT id, usuario, nombre, descripcion, foto_perfil, tarifa_hora_predeterminada, fecha_creacion, activo
       FROM trabajadores
       ORDER BY nombre ASC
     `;
@@ -25,7 +26,7 @@ const getTrabajadorById = async (req, res, next) => {
     const { id } = req.params;
     
     const query = `
-      SELECT id, usuario, nombre, descripcion, foto_perfil, fecha_creacion, activo
+      SELECT id, usuario, nombre, descripcion, foto_perfil, tarifa_hora_predeterminada, fecha_creacion, activo
       FROM trabajadores
       WHERE id = ?
     `;
@@ -89,18 +90,33 @@ const createTrabajador = async (req, res, next) => {
       });
     }
 
+    const passwordHash = await hashPassword(password);
+
+    const isAdmin = req.auth && req.auth.tipo === 'admin';
+    let tarifaPredeterminada = null;
+    if (isAdmin && req.body.tarifa_hora_predeterminada != null && req.body.tarifa_hora_predeterminada !== '') {
+      const t = Number(req.body.tarifa_hora_predeterminada);
+      if (Number.isFinite(t) && t >= 0) {
+        tarifaPredeterminada = t;
+      }
+    }
+
     const query = `
       INSERT INTO trabajadores 
-      (usuario, password_hash, nombre, descripcion, foto_perfil)
-      VALUES (?, SHA2(?, 256), ?, ?, ?)
+      (usuario, password_hash, nombre, descripcion, foto_perfil, tarifa_hora_predeterminada)
+      VALUES (?, ?, ?, ?, ?, ?)
     `;
+
+    const fotoNorm =
+      foto_perfil != null && String(foto_perfil).trim() ? String(foto_perfil).trim() : null;
 
     const [result] = await pool.query(query, [
       usuario,
-      password,
+      passwordHash,
       nombre,
       descripcion || null,
-      foto_perfil || null
+      fotoNorm,
+      tarifaPredeterminada,
     ]);
 
     res.status(201).json({
@@ -121,10 +137,19 @@ const createTrabajador = async (req, res, next) => {
 const updateTrabajador = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { nombre, descripcion, foto_perfil, activo } = req.body;
+    const { nombre, descripcion, foto_perfil, activo, tarifa_hora_predeterminada } = req.body;
 
     const updates = [];
     const values = [];
+    const isAdmin = req.auth && req.auth.tipo === 'admin';
+    const targetId = Number(id);
+
+    if (req.auth.tipo === 'trabajador' && targetId !== req.auth.userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'No puedes modificar el perfil de otro trabajador',
+      });
+    }
 
     if (nombre) {
       updates.push('nombre = ?');
@@ -134,13 +159,30 @@ const updateTrabajador = async (req, res, next) => {
       updates.push('descripcion = ?');
       values.push(descripcion);
     }
+    // foto_perfil: URL absoluta (p. ej. devuelta por POST /api/media/upload) o null para quitar
     if (foto_perfil !== undefined) {
       updates.push('foto_perfil = ?');
-      values.push(foto_perfil);
+      values.push(
+        foto_perfil != null && String(foto_perfil).trim()
+          ? String(foto_perfil).trim()
+          : null
+      );
     }
-    if (activo !== undefined) {
+    if (activo !== undefined && isAdmin) {
       updates.push('activo = ?');
       values.push(activo);
+    }
+    if (isAdmin && tarifa_hora_predeterminada !== undefined) {
+      if (tarifa_hora_predeterminada === null || tarifa_hora_predeterminada === '') {
+        updates.push('tarifa_hora_predeterminada = ?');
+        values.push(null);
+      } else {
+        const t = Number(tarifa_hora_predeterminada);
+        if (Number.isFinite(t) && t >= 0) {
+          updates.push('tarifa_hora_predeterminada = ?');
+          values.push(t);
+        }
+      }
     }
 
     if (updates.length === 0) {
@@ -168,6 +210,13 @@ const updateTrabajador = async (req, res, next) => {
 const cambiarPassword = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const targetId = Number(id);
+    if (req.auth.tipo === 'trabajador' && targetId !== req.auth.userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'No puedes cambiar la contraseña de otro trabajador',
+      });
+    }
     const { password_actual, password_nueva } = req.body;
 
     if (!password_actual || !password_nueva) {
@@ -177,24 +226,28 @@ const cambiarPassword = async (req, res, next) => {
       });
     }
 
-    // Verificar contraseña actual
-    const [trabajador] = await pool.query(
-      'SELECT id FROM trabajadores WHERE id = ? AND password_hash = SHA2(?, 256)',
-      [id, password_actual]
+    const [rows] = await pool.query(
+      'SELECT password_hash FROM trabajadores WHERE id = ?',
+      [id]
     );
 
-    if (trabajador.length === 0) {
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Trabajador no encontrado'
+      });
+    }
+
+    const ok = await verifyOnly('trabajadores', Number(id), password_actual, rows[0].password_hash);
+    if (!ok) {
       return res.status(401).json({
         success: false,
         error: 'Contraseña actual incorrecta'
       });
     }
 
-    // Actualizar contraseña
-    await pool.query(
-      'UPDATE trabajadores SET password_hash = SHA2(?, 256) WHERE id = ?',
-      [password_nueva, id]
-    );
+    const newHash = await hashPassword(password_nueva);
+    await pool.query('UPDATE trabajadores SET password_hash = ? WHERE id = ?', [newHash, id]);
 
     res.json({
       success: true,
@@ -288,8 +341,7 @@ const getHorasAsignadas = async (req, res, next) => {
         t.numero_horas,
         c.nombre as cliente_nombre,
         tt.horas_asignadas,
-        tt.horas_aprobadas,
-        (SELECT COUNT(*) FROM tarea_trabajadores WHERE tarea_id = t.id) as num_trabajadores
+        tt.horas_aprobadas
       FROM tarea_trabajadores tt
       JOIN tareas t ON tt.tarea_id = t.id
       JOIN clientes c ON t.cliente_id = c.id
@@ -302,14 +354,14 @@ const getHorasAsignadas = async (req, res, next) => {
 
     // Calcular horas asignadas para cada tarea y total
     const tareasConHoras = results.map(tarea => {
-      // Calcular horas: horas_aprobadas → horas_asignadas → división equitativa
+      // horas_aprobadas → horas_asignadas del join → duración de la tarea
       let horas = null;
       if (tarea.horas_aprobadas) {
         horas = parseFloat(tarea.horas_aprobadas);
       } else if (tarea.horas_asignadas) {
         horas = parseFloat(tarea.horas_asignadas);
-      } else if (tarea.numero_horas && tarea.num_trabajadores) {
-        horas = parseFloat(tarea.numero_horas) / tarea.num_trabajadores;
+      } else if (tarea.numero_horas) {
+        horas = parseFloat(tarea.numero_horas);
       }
 
       return {

@@ -1,4 +1,38 @@
+const path = require('path');
+const fs = require('fs').promises;
 const { pool } = require('../config/database');
+const { getUploadRoot } = require('../config/upload');
+
+function normalizeEvidencePath(relPath) {
+  const raw = String(relPath || '').trim();
+  if (!raw.startsWith('/uploads/media/')) return null;
+  const relativeToUploads = raw.replace(/^\/uploads\//, '');
+  const absolute = path.resolve(getUploadRoot(), relativeToUploads);
+  const mediaRoot = path.resolve(getUploadRoot(), 'media');
+  if (!absolute.startsWith(mediaRoot)) return null;
+  return absolute;
+}
+
+async function safeDeleteEvidenceFile(relPath) {
+  const absolute = normalizeEvidencePath(relPath);
+  if (!absolute) return;
+  await fs.unlink(absolute).catch(() => {});
+}
+
+const MAX_TAREA_EVIDENCIAS = 5;
+
+/**
+ * Borra filas y archivos en disco para la tarea.
+ * @param {import('mysql2/promise').Pool|import('mysql2/promise').PoolConnection} q pool o conexión con transacción
+ */
+async function removeAllEvidencesForTarea(tareaId, q) {
+  const [rows] = await q.query('SELECT path FROM tarea_evidencia WHERE tarea_id = ?', [tareaId]);
+  for (const row of rows) {
+    // eslint-disable-next-line no-await-in-loop
+    await safeDeleteEvidenceFile(row.path);
+  }
+  await q.query('DELETE FROM tarea_evidencia WHERE tarea_id = ?', [tareaId]);
+}
 
 // Obtener todas las tareas
 const getAllTareas = async (req, res, next) => {
@@ -61,7 +95,13 @@ const getTareaById = async (req, res, next) => {
         ...results[0],
         trabajadores
     };
-    
+
+    const [evidencias] = await pool.query(
+      'SELECT id, url, path, sort_order FROM tarea_evidencia WHERE tarea_id = ? ORDER BY sort_order ASC, id ASC',
+      [id]
+    );
+    tareaData.evidencias = evidencias;
+
     // Si la tarea está aprobada, obtener información del registro permanente
     if (results[0].estado === 'aprobada') {
       const queryAprobada = `
@@ -311,9 +351,40 @@ const asignarTrabajador = async (req, res, next) => {
       });
     }
 
-    // Insertar con horas_asignadas si se proporciona
+    const [tareaRows] = await pool.query('SELECT numero_horas FROM tareas WHERE id = ?', [tareaId]);
+    if (tareaRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Tarea no encontrada'
+      });
+    }
+
+    const numeroHorasRaw = tareaRows[0].numero_horas;
+    const numeroHoras =
+      numeroHorasRaw != null && numeroHorasRaw !== ''
+        ? parseFloat(numeroHorasRaw)
+        : null;
+
+    let finalHoras = null;
+    const bodyHoras =
+      horas_asignadas !== undefined && horas_asignadas !== null && horas_asignadas !== ''
+        ? parseFloat(horas_asignadas)
+        : NaN;
+
+    if (!Number.isNaN(bodyHoras)) {
+      if (numeroHoras != null && !Number.isNaN(numeroHoras)) {
+        finalHoras = Math.min(bodyHoras, numeroHoras);
+      } else {
+        finalHoras = bodyHoras;
+      }
+    } else {
+      if (numeroHoras != null && !Number.isNaN(numeroHoras)) {
+        finalHoras = numeroHoras;
+      }
+    }
+
     const query = 'INSERT INTO tarea_trabajadores (tarea_id, trabajador_id, horas_asignadas, notas) VALUES (?, ?, ?, ?)';
-    await pool.query(query, [tareaId, trabajador_id, horas_asignadas || null, notas || null]);
+    await pool.query(query, [tareaId, trabajador_id, finalHoras, notas || null]);
 
     // Actualizar estado de la tarea a 'asignada' si estaba 'pendiente'
     await pool.query(
@@ -484,7 +555,7 @@ const buscarTareasPorDireccion = async (req, res, next) => {
 const completarTarea = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { trabajador_id, comentarios } = req.body;
+    const { trabajador_id, comentarios, evidencias, evidencia_url, evidencia_path } = req.body;
 
     // Verificar que la tarea existe
     const [tarea] = await pool.query(
@@ -523,11 +594,70 @@ const completarTarea = async (req, res, next) => {
       });
     }
 
-    // Cambiar estado a 'completada', guardar comentarios y limpiar mensaje_rechazo
-    await pool.query(
-      'UPDATE tareas SET estado = ?, comentarios_trabajador = ?, mensaje_rechazo = NULL WHERE id = ?',
-      ['completada', comentarios || null, id]
-    );
+    let items = Array.isArray(evidencias) ? [...evidencias] : [];
+    if (
+      items.length === 0 &&
+      typeof evidencia_url === 'string' &&
+      evidencia_url.trim() &&
+      typeof evidencia_path === 'string' &&
+      evidencia_path.trim()
+    ) {
+      items = [{ url: evidencia_url.trim(), path: evidencia_path.trim() }];
+    }
+    if (items.length > MAX_TAREA_EVIDENCIAS) {
+      return res.status(400).json({
+        success: false,
+        error: `Máximo ${MAX_TAREA_EVIDENCIAS} imágenes de evidencia por tarea`,
+      });
+    }
+    for (let i = 0; i < items.length; i += 1) {
+      const e = items[i];
+      if (!e || typeof e.url !== 'string' || !e.url.trim() || typeof e.path !== 'string' || !e.path.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: 'Cada evidencia debe incluir url y path',
+        });
+      }
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await removeAllEvidencesForTarea(id, conn);
+
+      const [legacyRow] = await conn.query('SELECT evidencia_path FROM tareas WHERE id = ?', [id]);
+      const legacyPath = legacyRow?.[0]?.evidencia_path || null;
+      if (legacyPath) {
+        await safeDeleteEvidenceFile(legacyPath);
+      }
+
+      for (let i = 0; i < items.length; i += 1) {
+        const e = items[i];
+        // eslint-disable-next-line no-await-in-loop
+        await conn.query(
+          'INSERT INTO tarea_evidencia (tarea_id, url, path, sort_order) VALUES (?, ?, ?, ?)',
+          [id, e.url.trim(), e.path.trim(), i]
+        );
+      }
+
+      await conn.query(
+        `UPDATE tareas
+         SET estado = ?,
+             comentarios_trabajador = ?,
+             mensaje_rechazo = NULL,
+             evidencia_url = NULL,
+             evidencia_path = NULL,
+             evidencia_subida_at = NULL
+         WHERE id = ?`,
+        ['completada', comentarios || null, id]
+      );
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
 
     res.json({
       success: true,
@@ -630,10 +760,22 @@ const devolverTarea = async (req, res, next) => {
       });
     }
 
-    // Cambiar estado a 'asignada' (o estado_anterior si se especifica) y guardar mensaje
+    const [tareaPaths] = await pool.query('SELECT evidencia_path FROM tareas WHERE id = ?', [id]);
+    const legacyPath = tareaPaths?.[0]?.evidencia_path || null;
+    await removeAllEvidencesForTarea(id, pool);
+    if (legacyPath) {
+      await safeDeleteEvidenceFile(legacyPath);
+    }
+
     const nuevoEstado = estado_anterior || 'asignada';
     await pool.query(
-      'UPDATE tareas SET estado = ?, mensaje_rechazo = ? WHERE id = ?',
+      `UPDATE tareas
+       SET estado = ?,
+           mensaje_rechazo = ?,
+           evidencia_url = NULL,
+           evidencia_path = NULL,
+           evidencia_subida_at = NULL
+       WHERE id = ?`,
       [nuevoEstado, mensaje, id]
     );
 
@@ -661,80 +803,4 @@ module.exports = {
   aprobarTarea,
   devolverTarea,
 };
-
-// Marcar tarea como pagada
-const marcarTareaComoPagada = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { referencia_pago } = req.body;
-
-    // Verificar que la tarea existe y está aprobada
-    const [tarea] = await pool.query('SELECT estado FROM tareas WHERE id = ?', [id]);
-    
-    if (tarea.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Tarea no encontrada'
-      });
-    }
-
-    if (tarea[0].estado !== 'aprobada') {
-      return res.status(400).json({
-        success: false,
-        error: 'Solo se pueden marcar como pagadas las tareas aprobadas'
-      });
-    }
-
-    // Obtener el registro de aprobación
-    const [aprobada] = await pool.query(
-      'SELECT id FROM tareas_aprobadas WHERE tarea_id = ?',
-      [id]
-    );
-
-    if (aprobada.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Registro de aprobación no encontrado'
-      });
-    }
-
-    if (aprobada[0].estado_pago === 'pagado') {
-      return res.status(400).json({
-        success: false,
-        error: 'Esta tarea ya está marcada como pagada'
-      });
-    }
-
-    // Actualizar estado de pago
-    await pool.query(
-      'UPDATE tareas_aprobadas SET estado_pago = ?, fecha_pago = CURRENT_TIMESTAMP, referencia_pago = ? WHERE tarea_id = ?',
-      ['pagado', referencia_pago || null, id]
-    );
-
-    res.json({
-      success: true,
-      message: 'Tarea marcada como pagada exitosamente'
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-module.exports = {
-  getAllTareas,
-  getTareaById,
-  createTarea,
-  updateTarea,
-  deleteTarea,
-  getTareasByTrabajador,
-  asignarTrabajador,
-  desasignarTrabajador,
-  actualizarHorasTrabajador,
-  buscarTareasPorDireccion,
-  completarTarea,
-  aprobarTarea,
-  devolverTarea,
-  marcarTareaComoPagada,
-};
-
 

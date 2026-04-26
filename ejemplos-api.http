@@ -238,6 +238,17 @@ Content-Type: application/json
 GET {{baseUrl}}/direcciones/buscar?busqueda=Serrano
 
 ### ============================================
+### MEDIA (subida de imágenes, JWT requerido)
+### ============================================
+# multipart/form-data: campos "tipo" (cliente_perfil | trabajador_perfil | tarea_evidencia) y "file".
+# cliente_perfil y trabajador_perfil: solo admin. tarea_evidencia: admin o trabajador.
+# Usa Postman/Insomnia con form-data; REST Client aquí no adjunta binarios de forma práctica.
+#
+# POST {{baseUrl}}/media/upload
+# Authorization: Bearer <token>
+# Body: form-data → tipo = cliente_perfil, file = <archivo.jpg>
+
+### ============================================
 ### HEALTH CHECK
 ### ============================================
 
