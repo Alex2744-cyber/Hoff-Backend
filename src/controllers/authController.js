@@ -14,7 +14,7 @@ function signToken(user) {
 }
 
 function userPayload(row, tipo) {
-  return {
+  const base = {
     id: row.id,
     usuario: row.usuario,
     nombre: row.nombre,
@@ -22,6 +22,10 @@ function userPayload(row, tipo) {
     foto_perfil: row.foto_perfil,
     tipo,
   };
+  if (tipo === 'trabajador') {
+    base.contacto_emergencia = row.contacto_emergencia ?? null;
+  }
+  return base;
 }
 
 // Login único: administradores primero, luego trabajadores
@@ -58,7 +62,7 @@ const login = async (req, res, next) => {
     }
 
     const [trabRows] = await pool.query(
-      'SELECT id, usuario, nombre, descripcion, foto_perfil, password_hash FROM trabajadores WHERE usuario = ? AND activo = TRUE',
+      'SELECT id, usuario, nombre, descripcion, foto_perfil, contacto_emergencia, password_hash FROM trabajadores WHERE usuario = ? AND activo = TRUE',
       [u]
     );
 
@@ -143,8 +147,12 @@ const getMe = async (req, res, next) => {
   try {
     const table = req.auth.tipo === 'admin' ? 'administradores' : 'trabajadores';
     const tipo = req.auth.tipo === 'admin' ? 'admin' : 'trabajador';
+    const cols =
+      tipo === 'admin'
+        ? 'id, usuario, nombre, descripcion, foto_perfil'
+        : 'id, usuario, nombre, descripcion, foto_perfil, contacto_emergencia';
     const [rows] = await pool.query(
-      `SELECT id, usuario, nombre, descripcion, foto_perfil FROM ${table} WHERE id = ? AND activo = TRUE`,
+      `SELECT ${cols} FROM ${table} WHERE id = ? AND activo = TRUE`,
       [req.auth.userId]
     );
     if (rows.length === 0) {
@@ -160,7 +168,7 @@ const getMe = async (req, res, next) => {
 // PUT /api/auth/me — actualizar nombre, descripción, foto_perfil (no usuario)
 const updateMe = async (req, res, next) => {
   try {
-    const { nombre, descripcion, foto_perfil } = req.body;
+    const { nombre, descripcion, foto_perfil, contacto_emergencia } = req.body;
     const table = req.auth.tipo === 'admin' ? 'administradores' : 'trabajadores';
     const tipo = req.auth.tipo === 'admin' ? 'admin' : 'trabajador';
 
@@ -186,6 +194,12 @@ const updateMe = async (req, res, next) => {
       updates.push('foto_perfil = ?');
       values.push(trimOrNull(foto_perfil));
     }
+    if (tipo === 'trabajador' && contacto_emergencia !== undefined) {
+      let c = trimOrNull(contacto_emergencia);
+      if (c && c.length > 255) c = c.slice(0, 255);
+      updates.push('contacto_emergencia = ?');
+      values.push(c);
+    }
 
     if (updates.length === 0) {
       return res.status(400).json({
@@ -197,10 +211,11 @@ const updateMe = async (req, res, next) => {
     values.push(req.auth.userId);
     await pool.query(`UPDATE ${table} SET ${updates.join(', ')} WHERE id = ? AND activo = TRUE`, values);
 
-    const [rows] = await pool.query(
-      `SELECT id, usuario, nombre, descripcion, foto_perfil FROM ${table} WHERE id = ?`,
-      [req.auth.userId]
-    );
+    const colsPost =
+      tipo === 'admin'
+        ? 'id, usuario, nombre, descripcion, foto_perfil'
+        : 'id, usuario, nombre, descripcion, foto_perfil, contacto_emergencia';
+    const [rows] = await pool.query(`SELECT ${colsPost} FROM ${table} WHERE id = ?`, [req.auth.userId]);
     if (rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Usuario no encontrado' });
     }

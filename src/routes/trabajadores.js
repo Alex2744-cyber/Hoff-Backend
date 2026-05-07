@@ -6,6 +6,7 @@ const {
   createTrabajador,
   updateTrabajador,
   cambiarPassword,
+  resetPasswordByAdmin,
   deleteTrabajador,
   getHorasTrabajadas,
   getHorasAsignadas,
@@ -26,6 +27,9 @@ router.put('/:id', updateTrabajador);
 
 // PUT /api/trabajadores/:id/password - Cambiar contraseña
 router.put('/:id/password', cambiarPassword);
+
+// POST /api/trabajadores/:id/reset-password - Reset por admin con reautenticación
+router.post('/:id/reset-password', resetPasswordByAdmin);
 
 // DELETE /api/trabajadores/:id - Desactivar trabajador
 router.delete('/:id', deleteTrabajador);

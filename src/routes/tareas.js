@@ -22,6 +22,9 @@ router.get('/', getAllTareas);
 // GET /api/tareas/buscar?busqueda=calle - Buscar tareas por dirección
 router.get('/buscar', buscarTareasPorDireccion);
 
+// GET /api/tareas/trabajador/:trabajadorId - Obtener tareas de un trabajador (antes de /:id)
+router.get('/trabajador/:trabajadorId', getTareasByTrabajador);
+
 // GET /api/tareas/:id - Obtener tarea por ID
 router.get('/:id', getTareaById);
 
@@ -33,9 +36,6 @@ router.put('/:id', updateTarea);
 
 // DELETE /api/tareas/:id - Eliminar tarea
 router.delete('/:id', deleteTarea);
-
-// GET /api/tareas/trabajador/:trabajadorId - Obtener tareas de un trabajador
-router.get('/trabajador/:trabajadorId', getTareasByTrabajador);
 
 // POST /api/tareas/:tareaId/asignar - Asignar trabajador a tarea
 router.post('/:tareaId/asignar', asignarTrabajador);

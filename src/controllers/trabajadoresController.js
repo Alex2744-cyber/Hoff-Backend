@@ -1,11 +1,35 @@
 const { pool } = require('../config/database');
 const { hashPassword, verifyOnly } = require('../utils/password');
+const MIN_PASSWORD_LENGTH = 6;
+
+const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+function normalizeOptionalText(value, maxLen = 120) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  return s.slice(0, maxLen);
+}
+
+function normalizeFechaIngreso(value) {
+  if (value == null) return { ok: true, value: null };
+  const s = String(value).trim();
+  if (!s) return { ok: true, value: null };
+  if (!DATE_ONLY_REGEX.test(s)) {
+    return { ok: false, error: 'La fecha de ingreso debe tener formato YYYY-MM-DD' };
+  }
+  const d = new Date(`${s}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) {
+    return { ok: false, error: 'La fecha de ingreso no es válida' };
+  }
+  return { ok: true, value: s };
+}
 
 // Obtener todos los trabajadores
 const getAllTrabajadores = async (req, res, next) => {
   try {
     const query = `
-      SELECT id, usuario, nombre, descripcion, foto_perfil, tarifa_hora_predeterminada, fecha_creacion, activo
+      SELECT id, usuario, nombre, cargo, fecha_ingreso, contacto_emergencia, descripcion, foto_perfil, tarifa_hora_predeterminada, fecha_creacion, activo
       FROM trabajadores
       ORDER BY nombre ASC
     `;
@@ -26,7 +50,7 @@ const getTrabajadorById = async (req, res, next) => {
     const { id } = req.params;
     
     const query = `
-      SELECT id, usuario, nombre, descripcion, foto_perfil, tarifa_hora_predeterminada, fecha_creacion, activo
+      SELECT id, usuario, nombre, cargo, fecha_ingreso, contacto_emergencia, descripcion, foto_perfil, tarifa_hora_predeterminada, fecha_creacion, activo
       FROM trabajadores
       WHERE id = ?
     `;
@@ -68,7 +92,8 @@ const getTrabajadorById = async (req, res, next) => {
 // Crear nuevo trabajador
 const createTrabajador = async (req, res, next) => {
   try {
-    const { usuario, password, nombre, descripcion, foto_perfil } = req.body;
+    const { usuario, password, nombre, descripcion, foto_perfil, cargo, fecha_ingreso, contacto_emergencia } =
+      req.body;
 
     if (!usuario || !password || !nombre) {
       return res.status(400).json({
@@ -103,17 +128,29 @@ const createTrabajador = async (req, res, next) => {
 
     const query = `
       INSERT INTO trabajadores 
-      (usuario, password_hash, nombre, descripcion, foto_perfil, tarifa_hora_predeterminada)
-      VALUES (?, ?, ?, ?, ?, ?)
+      (usuario, password_hash, nombre, cargo, fecha_ingreso, contacto_emergencia, descripcion, foto_perfil, tarifa_hora_predeterminada)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const fotoNorm =
       foto_perfil != null && String(foto_perfil).trim() ? String(foto_perfil).trim() : null;
+    const cargoNorm = normalizeOptionalText(cargo, 120);
+    const contactoEmergenciaNorm = normalizeOptionalText(contacto_emergencia, 255);
+    const fechaIngresoNorm = normalizeFechaIngreso(fecha_ingreso);
+    if (!fechaIngresoNorm.ok) {
+      return res.status(400).json({
+        success: false,
+        error: fechaIngresoNorm.error,
+      });
+    }
 
     const [result] = await pool.query(query, [
       usuario,
       passwordHash,
       nombre,
+      cargoNorm,
+      fechaIngresoNorm.value,
+      contactoEmergenciaNorm,
       descripcion || null,
       fotoNorm,
       tarifaPredeterminada,
@@ -125,7 +162,10 @@ const createTrabajador = async (req, res, next) => {
       data: {
         id: result.insertId,
         usuario,
-        nombre
+        nombre,
+        cargo: cargoNorm,
+        fecha_ingreso: fechaIngresoNorm.value,
+        contacto_emergencia: contactoEmergenciaNorm,
       }
     });
   } catch (error) {
@@ -137,7 +177,16 @@ const createTrabajador = async (req, res, next) => {
 const updateTrabajador = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { nombre, descripcion, foto_perfil, activo, tarifa_hora_predeterminada } = req.body;
+    const {
+      nombre,
+      cargo,
+      fecha_ingreso,
+      contacto_emergencia,
+      descripcion,
+      foto_perfil,
+      activo,
+      tarifa_hora_predeterminada,
+    } = req.body;
 
     const updates = [];
     const values = [];
@@ -154,6 +203,25 @@ const updateTrabajador = async (req, res, next) => {
     if (nombre) {
       updates.push('nombre = ?');
       values.push(nombre);
+    }
+    if (cargo !== undefined) {
+      updates.push('cargo = ?');
+      values.push(normalizeOptionalText(cargo, 120));
+    }
+    if (fecha_ingreso !== undefined) {
+      const fechaIngresoNorm = normalizeFechaIngreso(fecha_ingreso);
+      if (!fechaIngresoNorm.ok) {
+        return res.status(400).json({
+          success: false,
+          error: fechaIngresoNorm.error,
+        });
+      }
+      updates.push('fecha_ingreso = ?');
+      values.push(fechaIngresoNorm.value);
+    }
+    if (contacto_emergencia !== undefined) {
+      updates.push('contacto_emergencia = ?');
+      values.push(normalizeOptionalText(contacto_emergencia, 255));
     }
     if (descripcion !== undefined) {
       updates.push('descripcion = ?');
@@ -252,6 +320,81 @@ const cambiarPassword = async (req, res, next) => {
     res.json({
       success: true,
       message: 'Contraseña actualizada exitosamente'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Resetear contraseña de trabajador (solo admin, con reautenticación)
+const resetPasswordByAdmin = async (req, res, next) => {
+  try {
+    if (!req.auth || req.auth.tipo !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Solo administradores pueden restablecer contraseñas',
+      });
+    }
+
+    const { id } = req.params;
+    const { admin_password, new_password } = req.body || {};
+
+    if (!admin_password || !new_password) {
+      return res.status(400).json({
+        success: false,
+        error: 'La contraseña del admin y la nueva contraseña son requeridas',
+      });
+    }
+
+    if (String(new_password).length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({
+        success: false,
+        error: `La nueva contraseña debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres`,
+      });
+    }
+
+    const [adminRows] = await pool.query(
+      'SELECT password_hash FROM administradores WHERE id = ? AND activo = TRUE',
+      [req.auth.userId]
+    );
+
+    if (adminRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Administrador no encontrado',
+      });
+    }
+
+    const adminOk = await verifyOnly(
+      'administradores',
+      Number(req.auth.userId),
+      String(admin_password),
+      adminRows[0].password_hash
+    );
+    if (!adminOk) {
+      return res.status(401).json({
+        success: false,
+        error: 'Contraseña de administrador incorrecta',
+      });
+    }
+
+    const [trabRows] = await pool.query(
+      'SELECT id FROM trabajadores WHERE id = ?',
+      [id]
+    );
+    if (trabRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Trabajador no encontrado',
+      });
+    }
+
+    const newHash = await hashPassword(String(new_password));
+    await pool.query('UPDATE trabajadores SET password_hash = ? WHERE id = ?', [newHash, id]);
+
+    return res.json({
+      success: true,
+      message: 'Contraseña del trabajador restablecida correctamente',
     });
   } catch (error) {
     next(error);
@@ -444,6 +587,7 @@ module.exports = {
   createTrabajador,
   updateTrabajador,
   cambiarPassword,
+  resetPasswordByAdmin,
   deleteTrabajador,
   getHorasTrabajadas,
   getHorasAsignadas,

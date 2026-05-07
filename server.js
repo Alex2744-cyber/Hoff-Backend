@@ -19,6 +19,7 @@ const horasRoutes = require('./src/routes/horas');
 const direccionesRoutes = require('./src/routes/direcciones');
 const finanzasRoutes = require('./src/routes/finanzas');
 const mediaRoutes = require('./src/routes/media');
+const contratosRoutes = require('./src/routes/contratos');
 const { ensureUploadRoot, getUploadRoot } = require('./src/config/upload');
 
 const app = express();
@@ -33,6 +34,7 @@ function parseAllowedOrigins(value) {
 
 const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
 const allowedOriginsSet = new Set(allowedOrigins);
+const isProduction = process.env.NODE_ENV === 'production';
 
 function corsOriginValidator(origin, callback) {
   if (!origin) {
@@ -59,7 +61,7 @@ const apiLimiter = rateLimit({
   message: { success: false, error: 'Demasiadas solicitudes. Intenta más tarde.' },
 });
 
-if (process.env.NODE_ENV === 'production') {
+if (isProduction) {
   app.set('trust proxy', 1);
   if (allowedOrigins.length === 0) {
     throw new Error(
@@ -75,7 +77,15 @@ app.use(
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   })
 );
-app.use(cors({ origin: corsOriginValidator }));
+// Desarrollo: Expo web (p. ej. :8081) y API en :3000 son orígenes distintos; reflejar Origin evita CORS sin listas locales.
+// Producción: solo ALLOWED_ORIGINS.
+app.use(
+  cors(
+    isProduction
+      ? { origin: corsOriginValidator }
+      : { origin: true }
+  )
+);
 app.use(apiLimiter);
 ensureUploadRoot();
 app.use('/uploads', express.static(path.join(getUploadRoot())));
@@ -124,6 +134,7 @@ app.use('/api/horas', requireAuth, horasRoutes);
 app.use('/api/direcciones', requireAuth, direccionesRoutes);
 app.use('/api/finanzas', requireAuth, finanzasRoutes);
 app.use('/api/media', requireAuth, mediaRoutes);
+app.use('/api/contratos', requireAuth, contratosRoutes);
 
 // Manejo de rutas no encontradas
 app.use('*', (req, res) => {

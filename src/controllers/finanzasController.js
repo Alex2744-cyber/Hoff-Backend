@@ -60,9 +60,9 @@ const getIngresosTotales = async (req, res, next) => {
   try {
     const query = `
       SELECT
-        (SELECT COALESCE(SUM(COALESCE(valor_servicio, 0)), 0) FROM tareas WHERE estado = 'aprobada') AS sum_tareas,
-        (SELECT COUNT(*) FROM tareas WHERE estado = 'aprobada') AS cnt_tareas,
-        (SELECT COALESCE(SUM(COALESCE(valor_servicio, 0)), 0) FROM tareas_aprobadas) AS sum_registro,
+        (SELECT COALESCE(SUM(COALESCE(valor_servicio, 0)), 0) FROM tareas WHERE estado = 'aprobada' AND contrato_id IS NULL) AS sum_tareas,
+        (SELECT COUNT(*) FROM tareas WHERE estado = 'aprobada' AND contrato_id IS NULL) AS cnt_tareas,
+        (SELECT COALESCE(SUM(COALESCE(valor_servicio, 0)), 0) FROM tareas_aprobadas WHERE tarea_id IN (SELECT id FROM tareas WHERE contrato_id IS NULL)) AS sum_registro,
         (SELECT COUNT(*) FROM tareas_aprobadas) AS cnt_registro
     `;
     const [results] = await pool.query(query);
@@ -75,7 +75,17 @@ const getIngresosTotales = async (req, res, next) => {
     res.json({
       success: true,
       data: {
-        ingresos_totales: sumTareas > 0 ? sumTareas : sumRegistro,
+        ingresos_totales:
+          (sumTareas > 0 ? sumTareas : sumRegistro) +
+          toNumber(
+            (
+              await pool.query(
+                `SELECT COALESCE(SUM(monto), 0) AS total
+                 FROM finanzas_pagos_contrato
+                 WHERE estado_pago = 'pagado'`
+              )
+            )[0][0]?.total
+          ),
         total_tareas_aprobadas: cntTareas > 0 ? cntTareas : cntRegistro,
       },
     });
@@ -89,17 +99,19 @@ const getResumenPeriodo = async (req, res, next) => {
     const { mes, anio } = getPeriodo(req);
     const [rows] = await pool.query(
       `SELECT
-        (SELECT COALESCE(SUM(valor_servicio), 0) FROM tareas_aprobadas WHERE mes_nomina = ? AND anio_nomina = ?) AS ingresos,
+        (SELECT COALESCE(SUM(valor_servicio), 0) FROM tareas_aprobadas WHERE mes_nomina = ? AND anio_nomina = ? AND tarea_id IN (SELECT id FROM tareas WHERE contrato_id IS NULL)) AS ingresos_tareas,
+        (SELECT COALESCE(SUM(monto), 0) FROM finanzas_pagos_contrato WHERE MONTH(fecha_pago) = ? AND YEAR(fecha_pago) = ? AND estado_pago = 'pagado') AS ingresos_contratos,
         (SELECT COALESCE(SUM(monto_neto), 0) FROM finanzas_pagos_nomina WHERE mes = ? AND anio = ?) AS egresos_nomina,
         (SELECT COALESCE(SUM(monto), 0) FROM finanzas_gastos WHERE MONTH(fecha) = ? AND YEAR(fecha) = ?) AS egresos_gastos,
         (SELECT COUNT(*) FROM tareas_aprobadas WHERE mes_nomina = ? AND anio_nomina = ?) AS tareas_aprobadas,
+        (SELECT COUNT(*) FROM finanzas_pagos_contrato WHERE MONTH(fecha_pago) = ? AND YEAR(fecha_pago) = ? AND estado_pago = 'pagado') AS contratos_pagados,
         (SELECT COUNT(*) FROM finanzas_pagos_nomina WHERE mes = ? AND anio = ?) AS pagos_nomina,
         (SELECT COUNT(*) FROM finanzas_gastos WHERE MONTH(fecha) = ? AND YEAR(fecha) = ?) AS gastos
       `,
-      [mes, anio, mes, anio, mes, anio, mes, anio, mes, anio, mes, anio]
+      [mes, anio, mes, anio, mes, anio, mes, anio, mes, anio, mes, anio, mes, anio]
     );
     const r = rows[0] || {};
-    const ingresos = toNumber(r.ingresos);
+    const ingresos = toNumber(r.ingresos_tareas) + toNumber(r.ingresos_contratos);
     const egresosNomina = toNumber(r.egresos_nomina);
     const egresosGastos = toNumber(r.egresos_gastos);
     const egresos = egresosNomina + egresosGastos;
@@ -113,6 +125,7 @@ const getResumenPeriodo = async (req, res, next) => {
         egresos_periodo: egresos,
         presupuesto_total_periodo: ingresos - egresos,
         tareas_aprobadas: toInt(r.tareas_aprobadas),
+        contratos_pagados: toInt(r.contratos_pagados),
         pagos_nomina: toInt(r.pagos_nomina),
         gastos: toInt(r.gastos),
       },
